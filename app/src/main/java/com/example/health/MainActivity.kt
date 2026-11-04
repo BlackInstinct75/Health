@@ -3,6 +3,7 @@ package com.example.health
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,8 +14,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
-// Modelo con categoría de comida incluida
+// Modelos y enums
 data class FoodItem(
     val id: Long = System.currentTimeMillis(),
     val name: String,
@@ -32,6 +34,17 @@ enum class MealCategory(val title: String) {
     OTHER("Otros")
 }
 
+enum class Gender(val title: String) {
+    MALE("Hombre"),
+    FEMALE("Mujer")
+}
+
+enum class GoalType(val title: String) {
+    MAINTAIN("Mantenerme"),
+    LOSE("Bajar de peso"),
+    GAIN("Subir de peso")
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -47,10 +60,32 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun CalorieTrackerApp() {
     val foodList = remember { mutableStateListOf<FoodItem>() }
-    var targetCalories by remember { mutableStateOf(2000) }
-    var showTargetDialog by remember { mutableStateOf(false) }
 
-    // Campos del formulario
+    // Objetivos diarios (Calorías y Macros)
+    var targetCalories by remember { mutableStateOf(2000) }
+    var targetProtein by remember { mutableStateOf(150) }
+    var targetCarbs by remember { mutableStateOf(200) }
+    var targetFat by remember { mutableStateOf(65) }
+
+    // Estados de diálogos
+    var showTargetDialog by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
+
+    // Estado para saber qué categorías están expandidas (burbujas)
+    val expandedCategories = remember { mutableStateMapOf<MealCategory, Boolean>() }
+
+    // Estado para editar un alimento
+    var editingFoodId by remember { mutableStateOf<Long?>(null) }
+
+    // Datos del perfil de usuario
+    var age by remember { mutableStateOf("25") }
+    var height by remember { mutableStateOf("175") }
+    var weight by remember { mutableStateOf("70") }
+    var gender by remember { mutableStateOf(Gender.MALE) }
+    var goalType by remember { mutableStateOf(GoalType.MAINTAIN) }
+    var weeklyRate by remember { mutableStateOf("0.5") }
+
+    // Campos del formulario de alimentos
     var nameInput by remember { mutableStateOf("") }
     var caloriesInput by remember { mutableStateOf("") }
     var proteinInput by remember { mutableStateOf("") }
@@ -59,7 +94,7 @@ fun CalorieTrackerApp() {
     var selectedCategory by remember { mutableStateOf(MealCategory.BREAKFAST) }
     var expandedCategoryDropdown by remember { mutableStateOf(false) }
 
-    // Totales calculados globalmente
+    // Totales globales consumidos
     val totalCalories = foodList.sumOf { it.calories }
     val totalProtein = foodList.sumOf { it.protein.toDouble() }.toFloat()
     val totalCarbs = foodList.sumOf { it.carbs.toDouble() }.toFloat()
@@ -69,6 +104,11 @@ fun CalorieTrackerApp() {
         topBar = {
             TopAppBar(
                 title = { Text("Contador de Calorías") },
+                actions = {
+                    TextButton(onClick = { showProfileDialog = true }) {
+                        Text("👤 Perfil", style = MaterialTheme.typography.bodyMedium)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primaryContainer
                 )
@@ -81,7 +121,7 @@ fun CalorieTrackerApp() {
                 .padding(16.dp)
                 .fillMaxSize()
         ) {
-            // 1. DASHBOARD DE RESUMEN GLOBAL (Arriba del todo)
+            // 1. RESUMEN GLOBAL (Arriba del todo)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -95,7 +135,7 @@ fun CalorieTrackerApp() {
                         ) {
                             Text("Resumen Diario", style = MaterialTheme.typography.titleMedium)
                             TextButton(onClick = { showTargetDialog = true }) {
-                                Text("Objetivo: $targetCalories kcal")
+                                Text("Obj: $targetCalories kcal")
                             }
                         }
 
@@ -108,24 +148,132 @@ fun CalorieTrackerApp() {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        Text("Total Calorías: $totalCalories / $targetCalories kcal")
+                        Text("Calorías: $totalCalories / $targetCalories kcal")
+
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Row(
-                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                            modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Prot: ${totalProtein}g")
-                            Text("Carbs: ${totalCarbs}g")
-                            Text("Grasas: ${totalFat}g")
+                            Text("Prot: ${totalProtein.roundToInt()} / ${targetProtein}g", style = MaterialTheme.typography.bodySmall)
+                            Text("Carbs: ${totalCarbs.roundToInt()} / ${targetCarbs}g", style = MaterialTheme.typography.bodySmall)
+                            Text("Grasas: ${totalFat.roundToInt()} / ${targetFat}g", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+
+            // 2. BURBUJAS / APARTADOS POR CATEGORÍA (Debajo del resumen)
+            item {
+                Text("Registros por Categoría", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            items(MealCategory.values()) { category ->
+                val itemsInCategory = foodList.filter { it.category == category }
+                val categoryCalories = itemsInCategory.sumOf { it.calories }
+                val isExpanded = expandedCategories[category] == true
+
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .clickable {
+                            // Al hacer clic en la burbuja, alterna su estado expandido
+                            expandedCategories[category] = !isExpanded
+                        },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(12.dp)) {
+                        // Cabecera de la burbuja
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${category.title} ${if (isExpanded) "▲" else "▼"}",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text("$categoryCalories kcal", style = MaterialTheme.typography.bodyMedium)
+                        }
+
+                        // Contenido desplegable al pulsar la burbuja
+                        if (isExpanded) {
+                            Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                            if (itemsInCategory.isEmpty()) {
+                                Text("No hay alimentos registrados aquí", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
+                            } else {
+                                itemsInCategory.forEach { item ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(item.name, style = MaterialTheme.typography.bodyMedium)
+                                            Text("P: ${item.protein}g | C: ${item.carbs}g | G: ${item.fat}g | ${item.calories} kcal", style = MaterialTheme.typography.bodySmall)
+                                        }
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            TextButton(
+                                                onClick = {
+                                                    editingFoodId = item.id
+                                                    nameInput = item.name
+                                                    caloriesInput = item.calories.toString()
+                                                    proteinInput = item.protein.toString()
+                                                    carbsInput = item.carbs.toString()
+                                                    fatInput = item.fat.toString()
+                                                    selectedCategory = item.category
+                                                },
+                                                contentPadding = PaddingValues(4.dp)
+                                            ) {
+                                                Text("Editar", style = MaterialTheme.typography.bodySmall)
+                                            }
+                                            TextButton(
+                                                onClick = {
+                                                    foodList.remove(item)
+                                                    if (editingFoodId == item.id) {
+                                                        editingFoodId = null
+                                                        nameInput = ""
+                                                        caloriesInput = ""
+                                                        proteinInput = ""
+                                                        carbsInput = ""
+                                                        fatInput = ""
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                contentPadding = PaddingValues(4.dp)
+                                            ) {
+                                                Text("Borrar", style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Spacer(modifier = Modifier.height(24.dp))
+                Divider()
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // 2. FORMULARIO PARA AÑADIR ALIMENTOS
+            // 3. FORMULARIO PARA AÑADIR/EDITAR ALIMENTO (Abajo del todo)
             item {
-                Text("Añadir Alimento", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = if (editingFoodId == null) "Añadir Alimento" else "Editar Alimento",
+                    style = MaterialTheme.typography.titleMedium
+                )
                 Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedTextField(
@@ -137,7 +285,6 @@ fun CalorieTrackerApp() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Selector de Categoría (Desayuno, Almuerzo, Cena, Otros)
                 ExposedDropdownMenuBox(
                     expanded = expandedCategoryDropdown,
                     onExpandedChange = { expandedCategoryDropdown = !expandedCategoryDropdown },
@@ -207,82 +354,68 @@ fun CalorieTrackerApp() {
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Button(
-                    onClick = {
-                        val cal = caloriesInput.toIntOrNull() ?: 0
-                        val prot = proteinInput.toFloatOrNull() ?: 0f
-                        val carb = carbsInput.toFloatOrNull() ?: 0f
-                        val fat = fatInput.toFloatOrNull() ?: 0f
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val cal = caloriesInput.toIntOrNull() ?: 0
+                            val prot = proteinInput.toFloatOrNull() ?: 0f
+                            val carb = carbsInput.toFloatOrNull() ?: 0f
+                            val fat = fatInput.toFloatOrNull() ?: 0f
 
-                        if (nameInput.isNotBlank() && cal > 0) {
-                            foodList.add(
-                                FoodItem(
-                                    name = nameInput,
-                                    calories = cal,
-                                    protein = prot,
-                                    carbs = carb,
-                                    fat = fat,
-                                    category = selectedCategory
-                                )
-                            )
-                            nameInput = ""
-                            caloriesInput = ""
-                            proteinInput = ""
-                            carbsInput = ""
-                            fatInput = ""
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Registrar en ${selectedCategory.title}")
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
-                Text("Registros por Categoría", style = MaterialTheme.typography.titleMedium)
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            // 3. APARTADOS CLASIFICADOS POR CADA COMIDA
-            items(MealCategory.values()) { category ->
-                val itemsInCategory = foodList.filter { it.category == category }
-                val categoryCalories = itemsInCategory.sumOf { it.calories }
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(category.title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                            Text("$categoryCalories kcal", style = MaterialTheme.typography.bodyMedium)
-                        }
-
-                        Divider(modifier = Modifier.padding(vertical = 6.dp))
-
-                        if (itemsInCategory.isEmpty()) {
-                            Text("No hay alimentos registrados", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
-                        } else {
-                            itemsInCategory.forEach { item ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column {
-                                        Text(item.name, style = MaterialTheme.typography.bodyMedium)
-                                        Text("P: ${item.protein}g | C: ${item.carbs}g | G: ${item.fat}g", style = MaterialTheme.typography.bodySmall)
+                            if (nameInput.isNotBlank() && cal > 0) {
+                                if (editingFoodId == null) {
+                                    foodList.add(
+                                        FoodItem(
+                                            name = nameInput,
+                                            calories = cal,
+                                            protein = prot,
+                                            carbs = carb,
+                                            fat = fat,
+                                            category = selectedCategory
+                                        )
+                                    )
+                                    // Auto expandir la burbuja donde se añadió
+                                    expandedCategories[selectedCategory] = true
+                                } else {
+                                    val index = foodList.indexOfFirst { it.id == editingFoodId }
+                                    if (index != -1) {
+                                        foodList[index] = FoodItem(
+                                            id = editingFoodId!!,
+                                            name = nameInput,
+                                            calories = cal,
+                                            protein = prot,
+                                            carbs = carb,
+                                            fat = fat,
+                                            category = selectedCategory
+                                        )
                                     }
-                                    Text("${item.calories} kcal", style = MaterialTheme.typography.bodyMedium)
+                                    editingFoodId = null
                                 }
+                                nameInput = ""
+                                caloriesInput = ""
+                                proteinInput = ""
+                                carbsInput = ""
+                                fatInput = ""
                             }
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(if (editingFoodId == null) "Registrar Alimento" else "Guardar Cambios")
+                    }
+
+                    if (editingFoodId != null) {
+                        OutlinedButton(
+                            onClick = {
+                                editingFoodId = null
+                                nameInput = ""
+                                caloriesInput = ""
+                                proteinInput = ""
+                                carbsInput = ""
+                                fatInput = ""
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Cancelar")
                         }
                     }
                 }
@@ -290,18 +423,18 @@ fun CalorieTrackerApp() {
         }
     }
 
-    // Diálogo para cambiar el objetivo diario
+    // DIÁLOGOS DE OBJETIVO Y PERFIL (Sin cambios estructurales)
     if (showTargetDialog) {
         var tempTarget by remember { mutableStateOf(targetCalories.toString()) }
         AlertDialog(
             onDismissRequest = { showTargetDialog = false },
-            title = { Text("Cambiar objetivo diario") },
+            title = { Text("Cambiar objetivo manual") },
             text = {
                 OutlinedTextField(
                     value = tempTarget,
                     onValueChange = { tempTarget = it },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    label = { Text("Calorías diarias") }
+                    label = { Text("Calorías diarias objetivo") }
                 )
             },
             confirmButton = {
@@ -314,6 +447,145 @@ fun CalorieTrackerApp() {
             },
             dismissButton = {
                 TextButton(onClick = { showTargetDialog = false }) {
+                    Text("Cancelar")
+                }
+            }
+        )
+    }
+
+    if (showProfileDialog) {
+        var tempAge by remember { mutableStateOf(age) }
+        var tempHeight by remember { mutableStateOf(height) }
+        var tempWeight by remember { mutableStateOf(weight) }
+        var tempGender by remember { mutableStateOf(gender) }
+        var tempGoal by remember { mutableStateOf(goalType) }
+        var tempRate by remember { mutableStateOf(weeklyRate) }
+
+        AlertDialog(
+            onDismissRequest = { showProfileDialog = false },
+            title = { Text("Perfil y Objetivos") },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = tempAge,
+                        onValueChange = { tempAge = it },
+                        label = { Text("Edad (años)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = tempHeight,
+                        onValueChange = { tempHeight = it },
+                        label = { Text("Altura (cm)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = tempWeight,
+                        onValueChange = { tempWeight = it },
+                        label = { Text("Peso (kg)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { tempGender = Gender.MALE },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (tempGender == Gender.MALE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Hombre")
+                        }
+                        Button(
+                            onClick = { tempGender = Gender.FEMALE },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (tempGender == Gender.FEMALE) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Mujer")
+                        }
+                    }
+
+                    Text("Objetivo:", style = MaterialTheme.typography.bodyMedium)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        GoalType.values().forEach { goal ->
+                            Button(
+                                onClick = { tempGoal = goal },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (tempGoal == goal) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                ),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(4.dp)
+                            ) {
+                                Text(
+                                    text = when(goal) {
+                                        GoalType.MAINTAIN -> "Mantener"
+                                        GoalType.LOSE -> "Bajar"
+                                        GoalType.GAIN -> "Subir"
+                                    },
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+
+                    if (tempGoal != GoalType.MAINTAIN) {
+                        OutlinedTextField(
+                            value = tempRate,
+                            onValueChange = { tempRate = it },
+                            label = { Text("Ritmo (kg/semana, ej: 0.5)") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    age = tempAge
+                    height = tempHeight
+                    weight = tempWeight
+                    gender = tempGender
+                    goalType = tempGoal
+                    weeklyRate = tempRate
+
+                    val w = weight.toFloatOrNull() ?: 70f
+                    val h = height.toFloatOrNull() ?: 175f
+                    val a = age.toIntOrNull() ?: 25
+
+                    val bmr = if (gender == Gender.MALE) {
+                        (10 * w) + (6.25 * h) - (5 * a) + 5
+                    } else {
+                        (10 * w) + (6.25 * h) - (5 * a) - 161
+                    }
+
+                    val tdee = bmr * 1.375
+                    val rate = weeklyRate.toFloatOrNull() ?: 0.5f
+                    val dailyAdjustment = (rate * 1100f).roundToInt()
+
+                    targetCalories = when (goalType) {
+                        GoalType.MAINTAIN -> tdee.roundToInt()
+                        GoalType.LOSE -> (tdee - dailyAdjustment).roundToInt().coerceAtLeast(1200)
+                        GoalType.GAIN -> (tdee + dailyAdjustment).roundToInt()
+                    }
+
+                    targetProtein = (w * 2.0f).roundToInt()
+                    targetFat = ((targetCalories * 0.25f) / 9f).roundToInt()
+                    val proteinCalories = targetProtein * 4
+                    val fatCalories = targetFat * 9
+                    val remainingCaloriesForCarbs = (targetCalories - proteinCalories - fatCalories).coerceAtLeast(0)
+                    targetCarbs = (remainingCaloriesForCarbs / 4f).roundToInt()
+
+                    showProfileDialog = false
+                }) {
+                    Text("Calcular y Guardar")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showProfileDialog = false }) {
                     Text("Cancelar")
                 }
             }
